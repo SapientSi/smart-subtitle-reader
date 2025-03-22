@@ -381,55 +381,97 @@ class SubtitleReader {
         textLines.push(...lines);
       }
     }
+    
     // 处理朗读用文本 - 保留URL位置但用空格代替
     const readingLines = textLines.map(line => {
       return this.filterTextKeepLength(line);
     });
+    
     // 处理显示用文本 - 完全移除URL
     const displayLines = textLines.map(line => {
       return this.filterTextComplete(line);
     });
+    
     // 合并处理后的朗读文本
     const cleanedText = readingLines.join(' ');
+    
     // 创建显示单元和字符映射
     const displayUnits = [];
     const charToUnitMap = new Array(cleanedText.length).fill(-1);
+    
     let currentPos = 0;
+    
+    // 改进的处理长行文本的方法
     for (let i = 0; i < displayLines.length; i++) {
       const displayLine = displayLines[i];
       const readingLine = readingLines[i];
+      
       if (!displayLine) continue;
+      
       // 智能分割显示行
       const units = this.smartSplitText(displayLine);
-      for (let j = 0; j < units.length; j++) {
-        const unit = units[j];
+      const lineStartPos = cleanedText.indexOf(readingLine, currentPos);
+      
+      if (lineStartPos === -1) continue;
+      
+      // 对于长行文本，需要正确计算每个分割单元的位置
+      if (units.length > 1) {
+        for (let j = 0; j < units.length; j++) {
+          const unit = units[j];
+          const unitIndex = displayUnits.length;
+          
+          // 计算此单元在原始行中的比例范围
+          const startRatio = unit.start / displayLine.length;
+          const endRatio = unit.end / displayLine.length;
+          
+          // 根据比例计算在朗读文本中的实际范围
+          const unitStartPos = Math.floor(lineStartPos + (readingLine.length * startRatio));
+          const unitEndPos = Math.floor(lineStartPos + (readingLine.length * endRatio));
+          
+          // 添加显示单元
+          displayUnits.push({
+            text: unit.text,
+            start: unitStartPos,
+            end: unitEndPos,
+            originalLine: i // 记录原始行，便于调试
+          });
+          
+          // 映射这个范围内的每个字符到此显示单元
+          for (let k = unitStartPos; k < unitEndPos; k++) {
+            if (k < charToUnitMap.length) {
+              charToUnitMap[k] = unitIndex;
+            }
+          }
+        }
+      } else {
+        // 单个单元的情况，直接映射整行
         const unitIndex = displayUnits.length;
-        // 在朗读文本中找到对应的部分
-        // 注意：我们在这里寻找的是可能包含空格占位符的朗读文本
-        const unitPos = cleanedText.indexOf(readingLine, currentPos);
-        if (unitPos !== -1) {
-          // 计算单元文本的结束位置
-          const unitEnd = unitPos + readingLine.length;
-          // 映射这个单位中的每个字符
-          for (let k = unitPos; k < unitEnd; k++) {
+        displayUnits.push({
+          text: units[0].text,
+          start: lineStartPos,
+          end: lineStartPos + readingLine.length,
+          originalLine: i
+        });
+        
+        // 映射字符
+        for (let k = lineStartPos; k < lineStartPos + readingLine.length; k++) {
+          if (k < charToUnitMap.length) {
             charToUnitMap[k] = unitIndex;
           }
-          displayUnits.push({
-            text: unit.text, // 使用已经完全过滤URL的文本用于显示
-            start: unitPos,
-            end: unitEnd
-          });
-          // 更新当前位置
-          currentPos = unitEnd;
         }
       }
+      
+      // 更新当前位置
+      currentPos = lineStartPos + readingLine.length;
     }
+    
     return {
       displayUnits,
       charToUnitMap,
       cleanedText
     };
   }
+  
   /**
    * 查找目标语音
    * @returns {SpeechSynthesisVoice} - 选定的语音
@@ -472,26 +514,59 @@ class SubtitleReader {
     this.showAnimation('loading');
     this.adjustWindowSize("加载中...");
     speechSynthesis.cancel();
+    
     // 使用已经过滤URL的文本创建语音对象
     const utterance = new SpeechSynthesisUtterance(this.filterTextComplete(cleanedText));
     utterance.voice = this.findTargetVoice();
     utterance.rate = this.config.speechRate;
     utterance.lang = 'zh-CN';
     let currentUnitIndex = -1;
+    
+    // 改进的边界事件处理
     utterance.onboundary = (event) => {
       if (event.name !== 'word' && event.name !== 'sentence') return;
+      
       const charIndex = event.charIndex || 0;
+      
+      // 找到最近的有效显示单元
+      let unitIndex = -1;
+      
+      // 直接查找当前字符对应的单元
       if (charIndex < charToUnitMap.length) {
-        const unitIndex = charToUnitMap[charIndex];
-        if (unitIndex !== -1 && unitIndex !== currentUnitIndex) {
-          currentUnitIndex = unitIndex;
-          if (displayUnits[unitIndex]) {
-            this.elements.subtitle.innerHTML = displayUnits[unitIndex].text;
-            this.adjustWindowSize(displayUnits[unitIndex].text);
+        unitIndex = charToUnitMap[charIndex];
+      }
+      
+      // 如果没有直接映射，向前找最近的有效单元
+      if (unitIndex === -1) {
+        for (let i = charIndex; i >= 0 && i >= charIndex - 50; i--) {
+          if (i < charToUnitMap.length && charToUnitMap[i] !== -1) {
+            unitIndex = charToUnitMap[i];
+            break;
           }
         }
       }
+      
+      // 如果向前找不到，向后找最近的有效单元
+      if (unitIndex === -1) {
+        for (let i = charIndex + 1; i < charToUnitMap.length && i <= charIndex + 50; i++) {
+          if (charToUnitMap[i] !== -1) {
+            unitIndex = charToUnitMap[i];
+            break;
+          }
+        }
+      }
+      
+      // 如果找到了有效单元且与当前不同，更新显示
+      if (unitIndex !== -1 && unitIndex !== currentUnitIndex) {
+        currentUnitIndex = unitIndex;
+        
+        if (displayUnits[unitIndex]) {
+          this.elements.subtitle.innerHTML = displayUnits[unitIndex].text;
+          this.adjustWindowSize(displayUnits[unitIndex].text);
+        }
+      }
     };
+    
     utterance.onend = () => {
       this.showAnimation('completion');
       this.adjustWindowSize("完成");
@@ -502,11 +577,13 @@ class SubtitleReader {
       const event = new CustomEvent('reading-complete');
       this.config.container.dispatchEvent(event);
     };
+    
     speechSynthesis.speak(utterance);
     // 触发开始事件
     const event = new CustomEvent('reading-start');
     this.config.container.dispatchEvent(event);
   }
+  
   /**
    * 停止朗读
    */
