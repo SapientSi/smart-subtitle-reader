@@ -141,11 +141,25 @@ class SubtitleReader {
   }
   
   /**
-   * 过滤文本中的URL和特殊字符
+   * 过滤URL和表情符号，但保持文本长度（用于朗读处理）
    * @param {string} text - 要过滤的文本
-   * @returns {string} - 过滤后的文本
+   * @returns {string} - 过滤后的文本，URL位置用空格占位
    */
-  filterText(text) {
+  filterTextKeepLength(text) {
+    return text
+      .replace(/https?:\/\/[^\s]+/g, match => ' '.repeat(match.length))
+      .replace(/www\.[^\s]+\.[a-z]{2,}/g, match => ' '.repeat(match.length))
+      .replace(/[\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+      .replace(/[^\p{L}\p{N}\p{P}\p{Z}]/gu, '')
+      .replace(/\s+/g, ' ');
+  }
+  
+  /**
+   * 完全过滤URL和表情符号（用于显示处理）
+   * @param {string} text - 要过滤的文本
+   * @returns {string} - 完全过滤后的文本
+   */
+  filterTextComplete(text) {
     return text
       .replace(/https?:\/\/[^\s]+/g, '')
       .replace(/www\.[^\s]+\.[a-z]{2,}/g, '')
@@ -165,17 +179,21 @@ class SubtitleReader {
     if (this.getTextWidth(text) <= this.config.maxTextWidth) {
       return [{ text, start: 0, end: text.length }];
     }
+    
     // 尝试按句子分割（句号、问号、感叹号）
     const sentenceRegex = /[^。！？!?]+[。！？!?]/g;
     let matches = [...text.matchAll(sentenceRegex)];
+    
     if (matches.length > 0) {
       // 检查每个句子是否需要继续拆分
       const units = [];
       let currentPos = 0;
+      
       for (const match of matches) {
         const sentence = match[0];
         const start = match.index;
         const end = start + sentence.length;
+        
         if (this.getTextWidth(sentence) <= this.config.maxTextWidth) {
           units.push({
             text: sentence,
@@ -187,11 +205,14 @@ class SubtitleReader {
           const subUnits = this.splitByPunctuation(sentence, start);
           units.push(...subUnits);
         }
+        
         currentPos = end;
       }
+      
       // 处理剩余文本
       if (currentPos < text.length) {
         const remaining = text.substring(currentPos);
+        
         if (remaining.trim()) {
           if (this.getTextWidth(remaining) <= this.config.maxTextWidth) {
             units.push({
@@ -205,8 +226,10 @@ class SubtitleReader {
           }
         }
       }
+      
       return units;
     }
+    
     // 如果找不到句子，按标点符号分割
     return this.splitByPunctuation(text, 0);
   }
@@ -221,12 +244,15 @@ class SubtitleReader {
     const punctRegex = /[^，、；,.;]+[，、；,.;]?/g;
     let matches = [...text.matchAll(punctRegex)];
     const units = [];
+    
     if (matches.length > 0) {
       let currentPos = 0;
+      
       for (const match of matches) {
         const phrase = match[0];
         const start = basePosition + match.index;
         const end = start + phrase.length;
+        
         if (this.getTextWidth(phrase) <= this.config.maxTextWidth) {
           units.push({
             text: phrase,
@@ -238,11 +264,14 @@ class SubtitleReader {
           const forceSplitUnits = this.forceSplitText(phrase, start);
           units.push(...forceSplitUnits);
         }
+        
         currentPos = match.index + phrase.length;
       }
+      
       // 处理剩余文本
       if (currentPos < text.length) {
         const remaining = text.substring(currentPos);
+        
         if (remaining.trim()) {
           if (this.getTextWidth(remaining) <= this.config.maxTextWidth) {
             units.push({
@@ -256,8 +285,10 @@ class SubtitleReader {
           }
         }
       }
+      
       return units;
     }
+    
     // 如果没有标点符号，强制分割
     return this.forceSplitText(text, basePosition);
   }
@@ -272,8 +303,10 @@ class SubtitleReader {
     const units = [];
     let currentText = "";
     let startPos = 0;
+    
     for (let i = 0; i < text.length; i++) {
       currentText += text[i];
+      
       // 如果当前文本超出最大宽度，分割
       if (this.getTextWidth(currentText) > this.config.maxTextWidth) {
         // 回退一个字符确保不超出宽度
@@ -281,15 +314,18 @@ class SubtitleReader {
           currentText = currentText.slice(0, -1);
           i--;
         }
+        
         units.push({
           text: currentText,
           start: basePosition + startPos,
           end: basePosition + startPos + currentText.length
         });
+        
         currentText = "";
         startPos = i + 1;
       }
     }
+    
     // 添加最后一部分
     if (currentText) {
       units.push({
@@ -298,6 +334,7 @@ class SubtitleReader {
         end: basePosition + text.length
       });
     }
+    
     return units;
   }
   
@@ -309,6 +346,7 @@ class SubtitleReader {
   extractLinesFromHTML(htmlContent) {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = htmlContent;
+    
     // 收集所有文本节点
     const textNodes = [];
     const walker = document.createTreeWalker(
@@ -317,18 +355,21 @@ class SubtitleReader {
       null,
       false
     );
+    
     let node;
     while (node = walker.nextNode()) {
       if (node.textContent.trim()) {
         textNodes.push(node.textContent.trim());
       }
     }
+    
     // 从文本节点中提取行
     let lines = [];
     for (const text of textNodes) {
       const textLines = text.split('\n').map(line => line.trim()).filter(line => line);
       lines = lines.concat(textLines);
     }
+    
     return lines;
   }
   
@@ -340,63 +381,84 @@ class SubtitleReader {
    */
   processText(text, mdHtml) {
     // 从Markdown HTML中提取行
-    const mdLines = this.extractLinesFromHTML(mdHtml);
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = mdHtml;
     
-    // 为每行创建处理后的文本
-    const processedLines = mdLines.map(line => {
-      // 找到所有URL
-      const urlMatches = [...line.matchAll(/https?:\/\/[^\s]+|www\.[^\s]+\.[a-z]{2,}/g)];
-      
-      // 创建没有URL的纯文本版本用于朗读和显示
-      let cleanedLine = line
-        .replace(/[\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
-        .replace(/https?:\/\/[^\s]+|www\.[^\s]+\.[a-z]{2,}/g, ' ') // 用空格替换URL
-        .replace(/[^\p{L}\p{N}\p{P}\p{Z}]/gu, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      
-      return { 
-        originalLine: line, 
-        cleanedLine 
-      };
-    }).filter(item => item.cleanedLine);
+    // 收集和过滤所有文本节点
+    const textLines = [];
+    const walker = document.createTreeWalker(
+      tempDiv,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
     
-    // 合并所有行用于朗读
-    const cleanedText = processedLines.map(item => item.cleanedLine).join(' ');
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.textContent.trim()) {
+        // 提取行
+        const lines = node.textContent.trim()
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line);
+        
+        textLines.push(...lines);
+      }
+    }
     
-    // 准备分段显示
+    // 处理朗读用文本 - 保留URL位置但用空格代替
+    const readingLines = textLines.map(line => {
+      return this.filterTextKeepLength(line);
+    });
+    
+    // 处理显示用文本 - 完全移除URL
+    const displayLines = textLines.map(line => {
+      return this.filterTextComplete(line);
+    });
+    
+    // 合并处理后的朗读文本
+    const cleanedText = readingLines.join(' ');
+    
+    // 创建显示单元和字符映射
     const displayUnits = [];
     const charToUnitMap = new Array(cleanedText.length).fill(-1);
-    let currentTextPos = 0;
     
-    for (const lineData of processedLines) {
-      const lineSections = this.smartSplitText(lineData.cleanedLine);
+    let currentPos = 0;
+    
+    for (let i = 0; i < displayLines.length; i++) {
+      const displayLine = displayLines[i];
+      const readingLine = readingLines[i];
       
-      for (const section of lineSections) {
-        const sectionText = section.text.trim();
-        if (!sectionText) continue;
-        
+      if (!displayLine) continue;
+      
+      // 智能分割显示行
+      const units = this.smartSplitText(displayLine);
+      
+      for (let j = 0; j < units.length; j++) {
+        const unit = units[j];
         const unitIndex = displayUnits.length;
         
-        // 查找在cleanedText中的位置
-        const sectionPos = cleanedText.indexOf(sectionText, currentTextPos);
+        // 在朗读文本中找到对应的部分
+        // 注意：我们在这里寻找的是可能包含空格占位符的朗读文本
+        const unitPos = cleanedText.indexOf(readingLine, currentPos);
         
-        if (sectionPos !== -1) {
-          const sectionEnd = sectionPos + sectionText.length;
+        if (unitPos !== -1) {
+          // 计算单元文本的结束位置
+          const unitEnd = unitPos + readingLine.length;
           
-          // 映射字符位置到显示单元
-          for (let i = sectionPos; i < sectionEnd; i++) {
-            charToUnitMap[i] = unitIndex;
+          // 映射这个单位中的每个字符
+          for (let k = unitPos; k < unitEnd; k++) {
+            charToUnitMap[k] = unitIndex;
           }
           
           displayUnits.push({
-            text: sectionText,
-            start: sectionPos,
-            end: sectionEnd
+            text: unit.text, // 使用已经完全过滤URL的文本用于显示
+            start: unitPos,
+            end: unitEnd
           });
           
           // 更新当前位置
-          currentTextPos = sectionEnd;
+          currentPos = unitEnd;
         }
       }
     }
@@ -425,10 +487,12 @@ class SubtitleReader {
    */
   adjustWindowSize(text) {
     if (!this.config.standalone) return;
+    
     const textWidth = this.getTextWidth(text);
     const screenWidth = window.screen.availWidth;
     const screenHeight = window.screen.availHeight;
     let newWidth, newHeight;
+    
     if (textWidth > this.config.maxWindowWidth) {
       this.elements.subtitle.className = 'multi-line';
       newWidth = this.config.maxWindowWidth;
@@ -438,6 +502,7 @@ class SubtitleReader {
       newWidth = Math.max(this.config.minWindowWidth, Math.min(textWidth, this.config.maxWindowWidth));
       newHeight = this.config.singleLineHeight;
     }
+    
     window.resizeTo(newWidth, newHeight);
     window.moveTo((screenWidth - newWidth) / 2, screenHeight - newHeight);
   }
@@ -455,7 +520,8 @@ class SubtitleReader {
     
     speechSynthesis.cancel();
     
-    const utterance = new SpeechSynthesisUtterance(cleanedText);
+    // 使用已经过滤URL的文本创建语音对象
+    const utterance = new SpeechSynthesisUtterance(this.filterTextComplete(cleanedText));
     utterance.voice = this.findTargetVoice();
     utterance.rate = this.config.speechRate;
     utterance.lang = 'zh-CN';
