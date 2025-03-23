@@ -1,6 +1,6 @@
 /***SubtitleReader - 字幕伴读库
- * 一个轻量级的JavaScript库，提供文本朗读功能，并伴随同步的字幕显示
- */
+* 一个轻量级的JavaScript库，提供文本朗读功能，并伴随同步的字幕显示
+*/
 class SubtitleReader {
   /**
    * 创建新的SubtitleReader实例
@@ -381,53 +381,40 @@ class SubtitleReader {
         textLines.push(...lines);
       }
     }
-    
     // 处理朗读用文本 - 保留URL位置但用空格代替
     const readingLines = textLines.map(line => {
       return this.filterTextKeepLength(line);
     });
-    
     // 处理显示用文本 - 完全移除URL
     const displayLines = textLines.map(line => {
       return this.filterTextComplete(line);
     });
-    
     // 合并处理后的朗读文本
     const cleanedText = readingLines.join(' ');
-    
     // 创建显示单元和字符映射
     const displayUnits = [];
     const charToUnitMap = new Array(cleanedText.length).fill(-1);
-    
     let currentPos = 0;
-    
     // 改进的处理长行文本的方法
     for (let i = 0; i < displayLines.length; i++) {
       const displayLine = displayLines[i];
       const readingLine = readingLines[i];
-      
       if (!displayLine) continue;
-      
       // 智能分割显示行
       const units = this.smartSplitText(displayLine);
       const lineStartPos = cleanedText.indexOf(readingLine, currentPos);
-      
       if (lineStartPos === -1) continue;
-      
       // 对于长行文本，需要正确计算每个分割单元的位置
       if (units.length > 1) {
         for (let j = 0; j < units.length; j++) {
           const unit = units[j];
           const unitIndex = displayUnits.length;
-          
           // 计算此单元在原始行中的比例范围
           const startRatio = unit.start / displayLine.length;
           const endRatio = unit.end / displayLine.length;
-          
           // 根据比例计算在朗读文本中的实际范围
           const unitStartPos = Math.floor(lineStartPos + (readingLine.length * startRatio));
           const unitEndPos = Math.floor(lineStartPos + (readingLine.length * endRatio));
-          
           // 添加显示单元
           displayUnits.push({
             text: unit.text,
@@ -435,7 +422,6 @@ class SubtitleReader {
             end: unitEndPos,
             originalLine: i // 记录原始行，便于调试
           });
-          
           // 映射这个范围内的每个字符到此显示单元
           for (let k = unitStartPos; k < unitEndPos; k++) {
             if (k < charToUnitMap.length) {
@@ -452,7 +438,6 @@ class SubtitleReader {
           end: lineStartPos + readingLine.length,
           originalLine: i
         });
-        
         // 映射字符
         for (let k = lineStartPos; k < lineStartPos + readingLine.length; k++) {
           if (k < charToUnitMap.length) {
@@ -460,18 +445,15 @@ class SubtitleReader {
           }
         }
       }
-      
       // 更新当前位置
       currentPos = lineStartPos + readingLine.length;
     }
-    
     return {
       displayUnits,
       charToUnitMap,
       cleanedText
     };
   }
-  
   /**
    * 查找目标语音
    * @returns {SpeechSynthesisVoice} - 选定的语音
@@ -504,6 +486,39 @@ class SubtitleReader {
     window.resizeTo(newWidth, newHeight);
     window.moveTo((screenWidth - newWidth) / 2, screenHeight - newHeight);
   }
+  
+  /**
+   * 查找字符对应的文本单元
+   * @param {number} charIndex - 字符索引
+   * @param {Array} charToUnitMap - 字符到单元的映射
+   * @param {number} currentUnitIndex - 当前单元索引
+   * @returns {number} - 找到的单元索引
+   */
+  findUnitForCharacter(charIndex, charToUnitMap, currentUnitIndex) {
+    // 1. 直接映射检查
+    if (charIndex < charToUnitMap.length) {
+      const unitIndex = charToUnitMap[charIndex];
+      if (unitIndex !== -1) return unitIndex;
+    }
+    
+    // 2. 向前查找最近有效单元 (更大范围)
+    for (let i = charIndex; i >= 0 && i >= charIndex - 100; i--) {
+      if (i < charToUnitMap.length && charToUnitMap[i] !== -1) {
+        return charToUnitMap[i];
+      }
+    }
+    
+    // 3. 向后查找 (更大范围)
+    for (let i = charIndex + 1; i < charToUnitMap.length && i <= charIndex + 100; i++) {
+      if (charToUnitMap[i] !== -1) {
+        return charToUnitMap[i];
+      }
+    }
+    
+    // 4. 如果都找不到，返回下一个单元
+    return currentUnitIndex + 1;
+  }
+  
   /**
    * 开始朗读文本
    */
@@ -511,6 +526,7 @@ class SubtitleReader {
     const rawText = this.elements.content.textContent;
     const mdHtml = this.elements.content.innerHTML;
     const { displayUnits, charToUnitMap, cleanedText } = this.processText(rawText, mdHtml);
+    
     this.showAnimation('loading');
     this.adjustWindowSize("加载中...");
     speechSynthesis.cancel();
@@ -520,52 +536,32 @@ class SubtitleReader {
     utterance.voice = this.findTargetVoice();
     utterance.rate = this.config.speechRate;
     utterance.lang = 'zh-CN';
-    let currentUnitIndex = -1;
     
-    // 改进的边界事件处理
+    let currentUnitIndex = -1;
+    let lastCharIndex = -1;
+    
+    // 改进的边界事件处理 - 添加更多检测点并防止重复处理
     utterance.onboundary = (event) => {
       if (event.name !== 'word' && event.name !== 'sentence') return;
       
       const charIndex = event.charIndex || 0;
+      if (charIndex === lastCharIndex) return; // 防止重复处理
+      lastCharIndex = charIndex;
       
-      // 找到最近的有效显示单元
-      let unitIndex = -1;
+      // 找到应该显示的单元
+      let unitIndex = this.findUnitForCharacter(charIndex, charToUnitMap, currentUnitIndex);
       
-      // 直接查找当前字符对应的单元
-      if (charIndex < charToUnitMap.length) {
-        unitIndex = charToUnitMap[charIndex];
-      }
-      
-      // 如果没有直接映射，向前找最近的有效单元
-      if (unitIndex === -1) {
-        for (let i = charIndex; i >= 0 && i >= charIndex - 50; i--) {
-          if (i < charToUnitMap.length && charToUnitMap[i] !== -1) {
-            unitIndex = charToUnitMap[i];
-            break;
-          }
-        }
-      }
-      
-      // 如果向前找不到，向后找最近的有效单元
-      if (unitIndex === -1) {
-        for (let i = charIndex + 1; i < charToUnitMap.length && i <= charIndex + 50; i++) {
-          if (charToUnitMap[i] !== -1) {
-            unitIndex = charToUnitMap[i];
-            break;
-          }
-        }
-      }
-      
-      // 如果找到了有效单元且与当前不同，更新显示
       if (unitIndex !== -1 && unitIndex !== currentUnitIndex) {
         currentUnitIndex = unitIndex;
-        
         if (displayUnits[unitIndex]) {
           this.elements.subtitle.innerHTML = displayUnits[unitIndex].text;
           this.adjustWindowSize(displayUnits[unitIndex].text);
         }
       }
     };
+    
+    // 添加字符级事件以增加同步点
+    utterance.onmark = utterance.onboundary;
     
     utterance.onend = () => {
       this.showAnimation('completion');
